@@ -4,5 +4,6 @@ python-dotenv>=1.0.0
 telebot
 pyTelegramBotAPI
 
-pip install ffmpeg-python
+ffmpeg-python
+
 
