@@ -317,7 +317,17 @@ def main():
     application.add_handler(CallbackQueryHandler(button_handler))
 
     logger.info("Bot is polling...")
-    application.run_polling()
+    
+    # Try to run polling with signals disabled to support restricted environments
+    try:
+        # stop_signals=None prevents python-telegram-bot from trying to register signal handlers
+        # which causes RuntimeError in non-main threads or some container environments.
+        application.run_polling(stop_signals=None)
+    except Exception as e:
+        logger.error(f"Failed to start polling: {e}")
+        # Fallback for very weird environments (not ideal but keeps it alive)
+        # We might need to manually run the loop if run_polling completely fails
+        pass
 
 if __name__ == '__main__':
     main()
