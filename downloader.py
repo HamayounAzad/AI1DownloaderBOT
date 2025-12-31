@@ -1,69 +1,42 @@
 import os
-import yt_dlp
+import time
 import logging
-import uuid
+import yt_dlp
+import config
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DOWNLOAD_DIR = 'downloads'
-
-if not os.path.exists(DOWNLOAD_DIR):
-    os.makedirs(DOWNLOAD_DIR)
+if not os.path.exists(config.output_folder):
+    os.makedirs(config.output_folder)
 
 class Downloader:
     def __init__(self):
-        self.ydl_opts = {
-            'format': 'bestvideo+bestaudio/best',
-            'merge_output_format': 'mp4',
-            'outtmpl': f'{DOWNLOAD_DIR}/%(id)s.%(ext)s',
-            'quiet': True,
-            'no_warnings': True,
-            'restrictfilenames': True,
-            # Use mobile clients to bypass "Sign in to confirm you’re not a bot"
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android', 'ios'],
-                },
-                'tiktok': {
-                    'app_version': '30.0.0', # Mock a recent app version
-                }
-            },
-            # Spoof User-Agent to look like a regular browser
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            # Force IPv4 as IPv6 is often more restricted
-            # TikTok sometimes blocks or has issues with IPv4, so we remove this restriction or make it flexible
-            # 'force_ipv4': True, 
-            # Force IPv4 explicitly because IPv6 often fails with "getaddrinfo failed" on some networks for TikTok
-            'force_ipv4': True,
-            'noplaylist': True,
-            'socket_timeout': 30,
-            # 'http_chunk_size': 10485760, # 10MB - Commented out as it might cause range issues
-            'retries': 10,
-            'fragment_retries': 10,
-            'ignoreerrors': True,
-            # Disable concurrent fragments to avoid "Conflicting range" errors on some servers
-            'concurrent_fragment_downloads': 1,
-        }
+        # We don't need complex init options anymore as we construct them per download
+        # matching main.py's approach
+        pass
 
     def get_info(self, url):
         """
         Extracts information from the URL without downloading.
         """
         try:
-            opts = self.ydl_opts.copy()
-            opts['quiet'] = True
+            # Basic options for getting info
+            opts = {
+                'quiet': True,
+                'no_warnings': True,
+                # TikTok specific fixes might still be useful for get_info if main.py doesn't oppose them
+                # But to stick to "exact same method", we'll use minimal options first.
+                # If users report issues, we can re-add them.
+                # However, get_info is not in the snippet of main.py provided.
+                # I will use a simple configuration for get_info.
+            }
             
-            # TikTok specific fixes for get_info
+            # TikTok/Instagram specific user-agent hacks often needed
             if 'tiktok.com' in url or 'vm.tiktok.com' in url:
-                # TikTok often blocks generic User-Agents or IPv6.
-                # 'facebookexternalhit' works well for link previews, which we simulate here.
-                # Also disabling IPv6 check for this specific request if global force_ipv4 is not enough
                 opts['user_agent'] = 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
-                # Some TikTok servers have DNS issues with IPv6 on certain networks
-                opts['force_ipv4'] = True 
-                
+            
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 if info is None:
@@ -84,93 +57,84 @@ class Downloader:
 
     def download(self, url, format_type='video', quality='best', progress_hook=None):
         """
-        Downloads media from the given URL.
-        format_type: 'video' or 'audio'
-        quality: 
-          - For video: 'best', '1080', '720', '480', '360' (height)
-          - For audio: 'best', '320', '192', '128' (bitrate in kbps)
-        progress_hook: function to call with progress updates
+        Downloads media from the given URL using the method from main.py.
         """
+        video_title = round(time.time() * 1000)
+        
+        audio = (format_type == 'audio')
+        
+        # Determine format_id
+        # main.py takes 'format_id' as argument.
+        # We map our quality/type args to a format string.
+        if audio:
+            format_id = 'bestaudio/best'
+        else:
+            if quality == 'best':
+                format_id = 'bestvideo+bestaudio/best'
+            elif quality in ['1080', '720', '480', '360']:
+                format_id = f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]'
+            else:
+                format_id = 'best'
+        
+        # Configuration exactly as requested from main.py
+        # {'format': format_id, 'outtmpl': f'{config.output_folder}/{video_title}.%(ext)s', 'progress_hooks': [progress], 'postprocessors': [{ ... }] if audio else [], 'max_filesize': config.max_filesize}
+        
+        opts = {
+            'format': format_id,
+            'outtmpl': f'{config.output_folder}/{video_title}.%(ext)s',
+            'progress_hooks': [progress_hook] if progress_hook else [],
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+            }] if audio else [],
+            'max_filesize': config.max_filesize,
+            'quiet': True,
+            'no_warnings': True
+        }
+
+        # TikTok/Instagram user agent hacks might be needed?
+        # The user said "use the exact same method as main.py". 
+        # main.py does NOT show these hacks in the snippet.
+        # I will strictly follow main.py and NOT add hacks unless necessary.
+        # However, for get_info I kept them because get_info wasn't in main.py snippet.
+        # For download, I will stick to the snippet provided.
+
         try:
-            # Create a unique temporary filename template to avoid collisions
-            unique_id = str(uuid.uuid4())[:8]
-            
-            opts = self.ydl_opts.copy()
-
-            if 'tiktok.com' in url or 'vm.tiktok.com' in url:
-                 opts['user_agent'] = 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
-                 opts['force_ipv4'] = True
-            
-            # Add progress hook
-            if progress_hook:
-                opts['progress_hooks'] = [progress_hook]
-
-            # Configure format based on type and quality
-            if format_type == 'audio':
-                opts['format'] = 'bestaudio/best'
-                opts['postprocessors'] = [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': quality if quality != 'best' else '192',
-                }]
-                opts['outtmpl'] = f'{DOWNLOAD_DIR}/{unique_id}_%(title).50s.%(ext)s'
-            else: # video
-                # Check if URL is Instagram, which often has single file formats
-                is_instagram = 'instagram.com' in url or 'instagr.am' in url
-                
-                if quality == 'best':
-                    if is_instagram:
-                         # Instagram often fails with bestvideo+bestaudio, so we fallback to 'best'
-                        opts['format'] = 'bestvideo+bestaudio/best'
-                    else:
-                        opts['format'] = 'bestvideo+bestaudio/best'
-                else:
-                    # Select best video with height <= quality
-                    opts['format'] = f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]'
-                
-                # For Instagram, if the specific format fails, we want to fallback
-                if is_instagram:
-                     # Allow fallback to just 'best' if merge fails or formats missing
-                     opts['format'] = opts['format'] + '/best'
-
-                opts['merge_output_format'] = 'mp4'
-                opts['outtmpl'] = f'{DOWNLOAD_DIR}/{unique_id}_%(title).50s.%(ext)s'
-
             with yt_dlp.YoutubeDL(opts) as ydl:
-                logger.info(f"Extracting info for {url}")
+                logger.info(f"Downloading {url} with opts: {opts}")
                 info = ydl.extract_info(url, download=True)
                 
                 if info is None:
                     return {
                         'status': 'error',
-                        'message': 'Could not extract information from the URL. The video might be private or unavailable.'
+                        'message': 'Could not extract information from the URL.'
                     }
 
                 # Determine file path
-                # yt-dlp might return a list of entries for playlists, we handle single file for now
-                if 'entries' in info:
-                    # It's a playlist or multi-video link, take the first one
-                    info = info['entries'][0]
+                # Since we use outtmpl with video_title (timestamp), we can predict the filename
+                # But extensions might change (e.g. mkv -> mp4 or audio conversion)
                 
+                # ydl.prepare_filename might return the 'before postprocessing' name
                 filename = ydl.prepare_filename(info)
                 
-                # If the file was merged (e.g. video+audio), the extension might differ from prepared filename
-                # We need to find the actual file on disk if the prepared one doesn't exist
+                # If audio postprocessor ran, it might have changed extension to mp3
+                if audio:
+                    base, _ = os.path.splitext(filename)
+                    filename = f"{base}.mp3"
+                
+                # Check if file exists, if not try to find it
                 if not os.path.exists(filename):
-                    # Try to find a file starting with the same name (ignoring extension)
-                    base_name = os.path.splitext(filename)[0]
-                    for f in os.listdir(DOWNLOAD_DIR):
-                        if f.startswith(os.path.basename(base_name)):
-                            filename = os.path.join(DOWNLOAD_DIR, f)
-                            break
+                     # fallback: list dir and find file starting with video_title
+                     for f in os.listdir(config.output_folder):
+                         if f.startswith(str(video_title)):
+                             filename = os.path.join(config.output_folder, f)
+                             break
                 
-                media_type = 'video'
-                if format_type == 'audio':
-                    media_type = 'audio'
-                # Check if it looks like an image (Pinterest often returns images)
-                elif filename.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
+                media_type = 'audio' if audio else 'video'
+                # Simple check for image
+                if filename.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
                     media_type = 'image'
-                
+
                 return {
                     'status': 'success',
                     'type': media_type,
